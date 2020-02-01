@@ -17,14 +17,51 @@ import copy
 import socket
 import array
 
-fib = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 0, 0, 0, 0]
+def ttl2ip(ttl):
+  """Define our extra hops here.
 
-#/include/uapi/linux/if_ether.h
+  TTL 1 is handled by our real interface, let's leave that alone.
+  Therefore it starts with ttl-2 index into this list but you can
+  do whatever math or list you want.
+
+  Returns:
+    ip in list format. str should be OK too.
+  """
+
+  fib = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 0, 0, 0, 0]
+  return [44, 38, 10, fib[ttl - 2]]
+
+"""The BPF filter code from tcpdump.
+
+get the C-struct from tcpdump using -dd
+make sure you reference correct interface
+whereas my default interface was ip, i will be
+opening my ethernet interface.
+
+tcpdump -i ens3 -dd $expression | tr -s '{}' '()'
+
+ttl < 16 and > 1 and dst host 44.38.10.234
+"""
+filter = [
+  ( 0x28, 0, 0, 0x0000000c ),
+  ( 0x15, 0, 6, 0x00000800 ),
+  ( 0x30, 0, 0, 0x00000016 ),
+  ( 0x35, 4, 0, 0x00000010 ),
+  ( 0x25, 0, 3, 0x00000001 ),
+  ( 0x20, 0, 0, 0x0000001e ),
+  ( 0x15, 0, 1, 0x2c260aea ),
+  ( 0x6, 0, 0, 0x00040000 ),
+  ( 0x6, 0, 0, 0x00000000 ),
+]
+
 class PHdr(ctypes.BigEndianStructure):
-  def hex(self):
-    return hexlify(bytearray(self))
+  """I had custom things here but not anymore."""
+
+  pass
 
 class ethhdr(PHdr):
+  """From include/uapi/linux/if_ether.h."""
+
   ETH_ALEN = 6
 
   _fields_ = [
@@ -34,6 +71,8 @@ class ethhdr(PHdr):
   ]
 
 class iphdr(PHdr):
+  """From incude/linux/ip.h."""
+
   _fields_ = [
     ("version", ctypes.c_ubyte, 4),
     ("ihl", ctypes.c_ubyte, 4),
@@ -100,7 +139,7 @@ def send_ttl_expire(s, in_eth, in_ip, payload):
   ip.check = 0
   ip.tot_len = ctypes.sizeof(ip) + ctypes.sizeof(icmp) + len(payload)
   ip.ttl = 63
-  ip.saddr = [44, 38, 10, fib[in_ip.ttl - 2]]
+  ip.saddr = ttl2ip(in_ip.ttl)
   ip._daddr = in_ip._saddr
   ip.check = checksum(bytearray(ip))
 
@@ -115,24 +154,6 @@ def send_ttl_expire(s, in_eth, in_ip, payload):
 #  print("send: ", hexlify(msg))
   ret = s.send(msg)
 
-# get the C-struct from tcpdump using -dd
-# make sure you reference correct interface
-# paste -d"\n" \
-#  <(tcpdump -d $expression | sed -e 's/^/# /') \
-#  <(tcpdump -dd $expression | tr -s '{}' '()')
-
-# ttl < 16 and > 1 and dst host 44.38.10.234
-filter = [
-  ( 0x28, 0, 0, 0x0000000c ),
-  ( 0x15, 0, 6, 0x00000800 ),
-  ( 0x30, 0, 0, 0x00000016 ),
-  ( 0x35, 4, 0, 0x00000010 ),
-  ( 0x25, 0, 3, 0x00000001 ),
-  ( 0x20, 0, 0, 0x0000001e ),
-  ( 0x15, 0, 1, 0x2c260aea ),
-  ( 0x6, 0, 0, 0x00040000 ),
-  ( 0x6, 0, 0, 0x00000000 ),
-]
 
 def main():
   blob = ctypes.create_string_buffer(b''.join(struct.pack("HBBI", *e) for e in filter))
@@ -150,16 +171,14 @@ def main():
       data, addr = s.recvfrom(65565)
       eth = ethhdr.from_buffer_copy(data)
       ip = iphdr.from_buffer_copy(data[ctypes.sizeof(ethhdr):])
-  
-  #    print("pkttype = ", addr[2], " ip.saddr = ", socket.inet_ntoa(struct.pack("=I", ip.saddr)),
-  #          "ip.daddr = ", socket.inet_ntoa(struct.pack("=I", ip.daddr)),
-  #          "ip.ttl = ", ip.ttl, " ip.protocol = ", ip.protocol)
-  
+
       # ICMP TIME EXCEED sends back 20 byte header plus first 64-bits of datagram
       print("%s %16s -> %16s ttl:%03d proto:%-3d" % ("*" if ip.ttl == 2 else " ", ip.saddr, ip.daddr, ip.ttl, ip.protocol))
-  #    print("recv: ", hexlify(data))
   
       send_ttl_expire(s, eth, ip, data[14:14+28])
 
 if __name__ == '__main__':
-  main()
+  try:
+    main()
+  except KeyboardInterrupt:
+    print("Ok bye")
