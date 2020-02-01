@@ -114,7 +114,7 @@ class iphdr(PHdr):
     elif isinstance(ip, list):
       self._saddr = int.from_bytes(ip, 'big')
     else:
-      raise ValueError
+      raise TypeError
 
   @property
   def saddr(self):
