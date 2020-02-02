@@ -72,6 +72,24 @@ filter = [
 
 class PHdr(ctypes.BigEndianStructure):
   """Base class for protocol headers."""
+  class ip4addr(ctypes.c_uint32):
+    """Data descriptor to work with ipv4 address in c_uint32 without thought."""
+    _src = None
+
+    def __init__(self, src):
+      self._src = src
+
+    def __get__(self, obj, type = None):
+      return str(socket.inet_ntoa(struct.pack('>I', getattr(obj, self._src))))
+
+    def __set__(self, obj, ip):
+      if isinstance(ip, str):
+        setattr(obj, self._src, struct.unpack('>I', socket.inet_aton(ip))[0])
+      elif isinstance(ip, list):
+        setattr(obj, self._src, int.from_bytes(ip, 'big'))
+      else:
+        raise TypeError
+
   def __len__(self):
     return ctypes.sizeof(self)
 
@@ -103,32 +121,8 @@ class iphdr(PHdr):
     ("_daddr", ctypes.c_uint32)
   ]
 
-  def __get_addr(self, addr):
-    return socket.inet_ntoa(struct.pack('>I', addr))
-
-  def __set_addr(self, addr, ip):
-    if isinstance(ip, str):
-      self._saddr = struct.unpack('>I', socket.inet_aton(ip))[0]
-    elif isinstance(ip, list):
-      self._saddr = int.from_bytes(ip, 'big')
-    else:
-      raise TypeError
-
-  @property
-  def saddr(self):
-    return self.__get_addr(self._saddr)
-
-  @saddr.setter
-  def saddr(self, *args, **kwargs):
-    return self.__set_addr(self._saddr, *args, **kwargs)
-
-  @property
-  def daddr(self):
-    return self.__get_addr(self._daddr)
-
-  @daddr.setter
-  def daddr(self, *args, **kwargs):
-    return self.__set_addr(self._daddr, *args, **kwargs)
+  saddr = PHdr.ip4addr('_saddr')
+  daddr = PHdr.ip4addr('_daddr')
 
 class icmphdr(PHdr):
   _fields_ = [
@@ -157,7 +151,7 @@ def send_ttl_expire(s, in_eth, in_ip, payload):
 
   eth = ethhdr(in_eth.h_source, in_eth.h_dest, in_eth.h_proto)
   ip = iphdr(version = 4, ihl = 5, id = in_ip.id, ttl = 64, protocol = 1,
-             saddr = saddr, _daddr = in_ip._saddr)
+             saddr = saddr, daddr = in_ip.saddr)
   icmp = icmphdr(11, 0, 0, 0, 0)
 
   ip.tot_len = len(ip) + len(icmp) + len(payload)
@@ -174,7 +168,7 @@ def send_echo_reply(s, in_eth, in_ip, payload):
   """Send normal ICMP ECHO reply."""
   eth = ethhdr(in_eth.h_source, in_eth.h_dest, in_eth.h_proto)
   ip = iphdr(version = 4, ihl = in_ip.ihl, id = in_ip.id, ttl = 64, protocol = 1,
-             _saddr = in_ip._daddr, _daddr = in_ip._saddr)
+             saddr = in_ip.daddr, daddr = in_ip.saddr)
   ipopts = payload[0:ip.ihl * 4 - len(ip)]
   icmp = icmphdr.from_buffer_copy(payload[len(ipopts):])
 
