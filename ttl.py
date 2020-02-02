@@ -199,9 +199,11 @@ def main():
   
   # As defined in asm/socket.h
   SO_ATTACH_FILTER = 26
+  # from include/linux/if_ether.h
+  ETH_P_IP = 0x800
   
   # Create listening socket with filters
-  s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(0x800))
+  s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
   s.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, bpf)
   s.bind((INTERFACE, 0x800))
   
