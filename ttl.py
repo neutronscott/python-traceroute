@@ -73,7 +73,7 @@ filter = [
 ]
 
 class PHdr(ctypes.BigEndianStructure):
-  """I had custom things here but not anymore."""
+  """Base class for protocol headers."""
   def __len__(self):
     return ctypes.sizeof(self)
 
@@ -199,7 +199,7 @@ def send_echo_reply(s, in_eth, in_ip, payload):
   msg = create_string_buffer(len(eth) + len(ip) + len(icmp) + len(payload))
   msg = bytearray(eth) + bytearray(ip) + bytearray(icmp) + payload
 
-  print("  %16s <- %16s ttl:%03d proto:%-3d icmp type:%-3d code:%-3d" % (ip.daddr, ip.saddr, ip.ttl, ip.protocol, icmp.type, icmp.code))
+  print("  %16s <- %16s ihl:%02d ttl:%03d proto:%-3d icmp type:%-3d code:%-3d" % (ip.daddr, ip.saddr, ip.ihl, ip.ttl, ip.protocol, icmp.type, icmp.code))
   ret = s.send(msg)
 
 def main():
@@ -219,14 +219,18 @@ def main():
       eth = ethhdr.from_buffer_copy(data)
       ip = iphdr.from_buffer_copy(data[len(eth):])
 
-      # ICMP TIME EXCEED sends back 20 byte header plus first 64-bits of datagram
+      # someone might ends these one day...?
+      ipoptslen = (4 * ip.ihl) - len(ip)
+
       print("%s %16s -> %16s ttl:%03d proto:%-3d" % ("*" if ip.ttl == 2 else " ", ip.saddr, ip.daddr, ip.ttl, ip.protocol))
   
       try:
-        send_ttl_expire(s, eth, ip, data[14:14+28])
+        p = len(eth)
+        # ICMP TIME EXCEED sends back ipheader plus first 64-bits of datagram
+        send_ttl_expire(s, eth, ip, data[p:p+20+ipoptslen+8])
       except ValueError:
         """ValueError raised if TTL is too high. Let's actually reply to pings."""
-        p = len(eth) + len(ip)
+        p = len(eth) + len(ip) + ipoptslen
         if ip.protocol == 1 and data[p] == 0x08 and data[p+1] == 0x00:
           send_echo_reply(s, eth, ip, data[p:])
 
