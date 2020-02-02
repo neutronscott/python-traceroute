@@ -23,25 +23,23 @@ def ttl2ip(ttl, dest):
   """Define our extra hops here.
 
   TTL 1 is handled by our real interface, let's leave that alone.
-  Therefore it starts with ttl-2 index into this list but you can
-  do whatever math or list you want.
+  Therefore it starts with ttl-2 index into a list I am dynamically
+  creating but the function is here to replace with whatever.
 
-  Need to cover all TTL in filter and higher should return dest
-  I cover TTL from 2..16 which is 15 hosts, 14 fib numbers and dest itself
-  or TTL >16 if ICMP ECHO REQUEST goes back to send_echo_reply
+  TTL 2..16 is 15 hosts, 14 fib numbers and dest itself
+  TTL >16 will raise IndexError, and calling function should see
+  that as an oppurtunity to send ICMP ECHO REPLY like normal host would.
 
+  Input:
+    ttl - ttl from an incoming ip packet
+    dest - the destination for packet
   Returns:
-    ip in list format. str should be OK too.
-    None if we should ignore this, TTL is too high
+    ip - source ip to use to send TIME EXPIRE
   """
 
   fib = [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233]
-  hop = ttl - 2
-  if hop == len(fib):
-    return dest
-  if hop > len(fib):
-    raise ValueError
-  return [44, 38, 10, fib[hop]]
+  ips = [[44, 38, 10, e] for e in fib] + [dest]
+  return ips[ttl - 2]
 
 """The BPF filter code from tcpdump.
 
@@ -152,22 +150,18 @@ def checksum(pkt):
 
 def send_ttl_expire(s, in_eth, in_ip, payload):
   """Send ICMP TIME expired from each fake hop."""
-  icmp = icmphdr(11, 0, 0, 0, 0)
   try:
     saddr = ttl2ip(in_ip.ttl, in_ip.daddr)
-  except ValueError:
-    raise ValueError
-  ip = copy.copy(in_ip)
-  ip.protocol = 1
-  ip.tot_len = len(ip) + len(icmp) + len(payload)
-  ip.ttl = 63
-  ip.saddr = saddr
-  ip._daddr = in_ip._saddr
-  ip.check = 0
-  ip.check = checksum(bytearray(ip))
+  except IndexError:
+    raise IndexError
 
   eth = ethhdr(in_eth.h_source, in_eth.h_dest, in_eth.h_proto)
+  ip = iphdr(version = 4, ihl = 5, id = in_ip.id, ttl = 64, protocol = 1,
+             saddr = saddr, _daddr = in_ip._saddr)
+  icmp = icmphdr(11, 0, 0, 0, 0)
 
+  ip.tot_len = len(ip) + len(icmp) + len(payload)
+  ip.check = checksum(bytearray(ip))
   icmp.checksum = checksum(bytearray(icmp) + payload)
 
   msg = create_string_buffer(len(eth) + len(ip) + len(icmp) + len(payload))
@@ -178,28 +172,25 @@ def send_ttl_expire(s, in_eth, in_ip, payload):
 
 def send_echo_reply(s, in_eth, in_ip, payload):
   """Send normal ICMP ECHO reply."""
-  icmp = icmphdr.from_buffer_copy(payload)
+  eth = ethhdr(in_eth.h_source, in_eth.h_dest, in_eth.h_proto)
+  ip = iphdr(version = 4, ihl = in_ip.ihl, id = in_ip.id, ttl = 64, protocol = 1,
+             _saddr = in_ip._daddr, _daddr = in_ip._saddr)
+  ipopts = payload[0:ip.ihl * 4 - len(ip)]
+  icmp = icmphdr.from_buffer_copy(payload[len(ipopts):])
+
   icmp.type = 0
   icmp.code = 0
-  payload = payload[len(icmp):]
-
-  ip = copy.copy(in_ip)
-  ip.tot_len = len(ip) + len(icmp) + len(payload)
-  ip.ttl = 63
-  ip._saddr = in_ip._daddr
-  ip._daddr = in_ip._saddr
-  ip.check = 0
-  ip.check = checksum(bytearray(ip))
-
-  eth = ethhdr(in_eth.h_source, in_eth.h_dest, in_eth.h_proto)
-
   icmp.checksum = 0
+
+  payload = payload[len(ipopts) + len(icmp):]
+  ip.tot_len = len(ip) + len(ipopts) + len(icmp) + len(payload)
+  ip.check = checksum(bytearray(ip) + bytearray(ipopts))
   icmp.checksum = checksum(bytearray(icmp) + payload)
 
-  msg = create_string_buffer(len(eth) + len(ip) + len(icmp) + len(payload))
-  msg = bytearray(eth) + bytearray(ip) + bytearray(icmp) + payload
+  msg = create_string_buffer(len(eth) + len(ip) + len(ipopts) + len(icmp) + len(payload))
+  msg = bytearray(eth) + bytearray(ip) + bytearray(ipopts) + bytearray(icmp) + payload
 
-  print("  %16s <- %16s ihl:%02d ttl:%03d proto:%-3d icmp type:%-3d code:%-3d" % (ip.daddr, ip.saddr, ip.ihl, ip.ttl, ip.protocol, icmp.type, icmp.code))
+  print("  %16s <- %16s ttl:%03d proto:%-3d icmp type:%-3d code:%-3d" % (ip.daddr, ip.saddr, ip.ttl, ip.protocol, icmp.type, icmp.code))
   ret = s.send(msg)
 
 def main():
@@ -215,11 +206,12 @@ def main():
   s.bind((INTERFACE, 0x800))
   
   while True:
-      data, addr = s.recvfrom(65565)
+      mv, addr = s.recvfrom(65565)
+      data = memoryview(mv)
       eth = ethhdr.from_buffer_copy(data)
       ip = iphdr.from_buffer_copy(data[len(eth):])
 
-      # someone might ends these one day...?
+      # someone might send these one day...?
       ipoptslen = (4 * ip.ihl) - len(ip)
 
       print("%s %16s -> %16s ttl:%03d proto:%-3d" % ("*" if ip.ttl == 2 else " ", ip.saddr, ip.daddr, ip.ttl, ip.protocol))
@@ -228,10 +220,10 @@ def main():
         p = len(eth)
         # ICMP TIME EXCEED sends back ipheader plus first 64-bits of datagram
         send_ttl_expire(s, eth, ip, data[p:p+20+ipoptslen+8])
-      except ValueError:
-        """ValueError raised if TTL is too high. Let's actually reply to pings."""
-        p = len(eth) + len(ip) + ipoptslen
-        if ip.protocol == 1 and data[p] == 0x08 and data[p+1] == 0x00:
+      except IndexError:
+        """IndexError raised if TTL is too high. Let's actually reply to pings."""
+        p = len(eth) + len(ip) # keep ipopts in datagram?
+        if ip.protocol == 1 and data[ipoptslen+p] == 0x08 and data[ipoptslen+p+1] == 0x00:
           send_echo_reply(s, eth, ip, data[p:])
 
 if __name__ == '__main__':
