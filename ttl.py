@@ -162,7 +162,7 @@ def send_ttl_expire(s, in_eth, in_ip, payload):
   msg = bytearray(eth) + bytearray(ip) + bytearray(icmp) + payload
 
   print("  %16s <- %16s ttl:%03d proto:%-3d icmp type:%-3d code:%-3d" % (ip.daddr, ip.saddr, ip.ttl, ip.protocol, icmp.type, icmp.code))
-  ret = s.send(msg)
+  s.send(msg)
 
 def send_echo_reply(s, in_eth, in_ip, payload):
   """Send normal ICMP ECHO reply."""
@@ -185,7 +185,7 @@ def send_echo_reply(s, in_eth, in_ip, payload):
   msg = bytearray(eth) + bytearray(ip) + bytearray(ipopts) + bytearray(icmp) + payload
 
   print("  %16s <- %16s ttl:%03d proto:%-3d icmp type:%-3d code:%-3d" % (ip.daddr, ip.saddr, ip.ttl, ip.protocol, icmp.type, icmp.code))
-  ret = s.send(msg)
+  s.send(msg)
 
 def main():
   blob = ctypes.create_string_buffer(b''.join(struct.pack("HBBI", *e) for e in filter))
@@ -197,12 +197,12 @@ def main():
   ETH_P_IP = 0x800
   
   # Create listening socket with filters
-  s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP))
+  s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(ETH_P_IP)) # pylint: disable=no-member
   s.setsockopt(socket.SOL_SOCKET, SO_ATTACH_FILTER, bpf)
   s.bind((INTERFACE, 0x800))
   
   while True:
-      mv, addr = s.recvfrom(65565)
+      mv, _ = s.recvfrom(65565)
       data = memoryview(mv)
       eth = ethhdr.from_buffer_copy(data)
       ip = iphdr.from_buffer_copy(data[len(eth):])
