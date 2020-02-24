@@ -154,10 +154,7 @@ def checksum(pkt):
 
 def send_ttl_expire(s, in_eth, in_ip, payload):
     """Send ICMP TIME expired from each fake hop."""
-    try:
-        saddr = ttl2ip(in_ip.ttl, in_ip.daddr)
-    except IndexError:
-        raise IndexError
+    saddr = ttl2ip(in_ip.ttl, in_ip.daddr)
 
     eth = ethhdr(in_eth.h_source, in_eth.h_dest, in_eth.h_proto)
     ip = iphdr(
